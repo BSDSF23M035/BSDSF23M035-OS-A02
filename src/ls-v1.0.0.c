@@ -12,11 +12,36 @@
 
 enum display_mode { DEFAULT, LONG, HORIZONTAL };
 
-// ---------------------- Comparison Function for qsort ----------------------
+// ANSI colors
+#define COLOR_RESET   "\033[0m"
+#define COLOR_BLUE    "\033[0;34m" // Directory
+#define COLOR_GREEN   "\033[0;32m" // Executable
+#define COLOR_RED     "\033[0;31m" // Archive
+#define COLOR_PINK    "\033[0;35m" // Symlink
+#define COLOR_REVERSE "\033[7m"    // Special
+
+// ---------------------- Comparison Function ----------------------
 int cmp_str(const void *a, const void *b) {
     char * const *str1 = (char* const*)a;
     char * const *str2 = (char* const*)b;
     return strcmp(*str1, *str2);
+}
+
+// ---------------------- Print colored ----------------------
+void print_colored(const char *filename, mode_t mode) {
+    if (S_ISDIR(mode)) {
+        printf(COLOR_BLUE "%s" COLOR_RESET, filename);
+    } else if (S_ISLNK(mode)) {
+        printf(COLOR_PINK "%s" COLOR_RESET, filename);
+    } else if (S_ISREG(mode) && (mode & S_IXUSR)) {
+        printf(COLOR_GREEN "%s" COLOR_RESET, filename);
+    } else if (strstr(filename, ".tar") || strstr(filename, ".gz") || strstr(filename, ".zip")) {
+        printf(COLOR_RED "%s" COLOR_RESET, filename);
+    } else if (S_ISCHR(mode) || S_ISBLK(mode) || S_ISFIFO(mode) || S_ISSOCK(mode)) {
+        printf(COLOR_REVERSE "%s" COLOR_RESET, filename);
+    } else {
+        printf("%s", filename); // default
+    }
 }
 
 // ---------------------- Long Listing ----------------------
@@ -44,13 +69,15 @@ void long_listing_from_array(char **filenames, int count) {
         char timebuf[20];
         strftime(timebuf, sizeof(timebuf), "%b %d %H:%M", localtime(&st.st_mtime));
 
-        printf("%s %2ld %s %s %5ld %s %s\n",
+        printf("%s %2ld %s %s %5ld %s ",
                perms, (long)st.st_nlink,
                pw ? pw->pw_name : "unknown",
                gr ? gr->gr_name : "unknown",
                (long)st.st_size,
-               timebuf,
-               filenames[i]);
+               timebuf);
+
+        print_colored(filenames[i], st.st_mode);
+        printf("\n");
     }
 }
 
@@ -59,8 +86,11 @@ void column_display_from_array(char **filenames, int count) {
     if (count == 0) return;
 
     int max_len = 0;
-    for (int i = 0; i < count; i++)
+    for (int i = 0; i < count; i++) {
+        struct stat st;
+        if (stat(filenames[i], &st) == -1) continue;
         if ((int)strlen(filenames[i]) > max_len) max_len = strlen(filenames[i]);
+    }
 
     struct winsize w;
     int term_width = 80;
@@ -75,8 +105,12 @@ void column_display_from_array(char **filenames, int count) {
     for (int r = 0; r < num_rows; r++) {
         for (int c = 0; c < num_cols; c++) {
             int idx = r + c * num_rows;
-            if (idx < count)
-                printf("%-*s", max_len + spacing, filenames[idx]);
+            if (idx < count) {
+                struct stat st;
+                stat(filenames[idx], &st);
+                print_colored(filenames[idx], st.st_mode);
+                printf("%*s", max_len - (int)strlen(filenames[idx]) + spacing, "");
+            }
         }
         printf("\n");
     }
@@ -87,8 +121,11 @@ void horizontal_display_from_array(char **filenames, int count) {
     if (count == 0) return;
 
     int max_len = 0;
-    for (int i = 0; i < count; i++)
+    for (int i = 0; i < count; i++) {
+        struct stat st;
+        if (stat(filenames[i], &st) == -1) continue;
         if ((int)strlen(filenames[i]) > max_len) max_len = strlen(filenames[i]);
+    }
 
     struct winsize w;
     int term_width = 80;
@@ -100,8 +137,11 @@ void horizontal_display_from_array(char **filenames, int count) {
     int cur_width = 0;
 
     for (int i = 0; i < count; i++) {
-        printf("%-*s", col_width, filenames[i]);
+        struct stat st;
+        stat(filenames[i], &st);
+        print_colored(filenames[i], st.st_mode);
         cur_width += col_width;
+        printf("%*s", col_width - (int)strlen(filenames[i]), "");
         if (cur_width + col_width > term_width) {
             printf("\n");
             cur_width = 0;
@@ -110,7 +150,7 @@ void horizontal_display_from_array(char **filenames, int count) {
     if (cur_width != 0) printf("\n");
 }
 
-// ---------------------- Read Directory, Skip Hidden, Sort ----------------------
+// ---------------------- Read Directory, Sort ----------------------
 char **read_and_sort(const char *path, int *count) {
     struct dirent *entry;
     DIR *dir = opendir(path);
@@ -120,7 +160,7 @@ char **read_and_sort(const char *path, int *count) {
     *count = 0;
 
     while ((entry = readdir(dir)) != NULL) {
-        if (entry->d_name[0] == '.') continue; // skip hidden files
+        if (entry->d_name[0] == '.') continue; // skip hidden
         filenames = realloc(filenames, sizeof(char*) * (*count + 1));
         filenames[*count] = strdup(entry->d_name);
         (*count)++;
