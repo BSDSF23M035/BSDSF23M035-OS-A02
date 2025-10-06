@@ -12,22 +12,18 @@
 
 enum display_mode { DEFAULT, LONG, HORIZONTAL };
 
-// ---------------------- Long Listing (-l) ----------------------
-void long_listing(const char *path) {
-    (void)path; // to suppress unused warning if path is not used
-    struct dirent *entry;
-    DIR *dir = opendir(path);
-    if (!dir) {
-        perror("opendir");
-        return;
-    }
+// ---------------------- Comparison Function for qsort ----------------------
+int cmp_str(const void *a, const void *b) {
+    char * const *str1 = (char* const*)a;
+    char * const *str2 = (char* const*)b;
+    return strcmp(*str1, *str2);
+}
 
-    while ((entry = readdir(dir)) != NULL) {
+// ---------------------- Long Listing ----------------------
+void long_listing_from_array(char **filenames, int count) {
+    for (int i = 0; i < count; i++) {
         struct stat st;
-        if (stat(entry->d_name, &st) == -1) {
-            perror("stat");
-            continue;
-        }
+        if (stat(filenames[i], &st) == -1) continue;
 
         char perms[11];
         perms[0] = S_ISDIR(st.st_mode) ? 'd' : '-';
@@ -54,35 +50,17 @@ void long_listing(const char *path) {
                gr ? gr->gr_name : "unknown",
                (long)st.st_size,
                timebuf,
-               entry->d_name);
+               filenames[i]);
     }
-
-    closedir(dir);
 }
 
 // ---------------------- Column Display (Down-Then-Across) ----------------------
-void column_display(const char *path) {
-    struct dirent *entry;
-    DIR *dir = opendir(path);
-    if (!dir) {
-        perror("opendir");
-        return;
-    }
-
-    char **filenames = NULL;
-    int count = 0;
-    int max_len = 0;
-
-    while ((entry = readdir(dir)) != NULL) {
-        filenames = realloc(filenames, sizeof(char*) * (count + 1));
-        filenames[count] = strdup(entry->d_name);
-        int len = strlen(entry->d_name);
-        if (len > max_len) max_len = len;
-        count++;
-    }
-    closedir(dir);
-
+void column_display_from_array(char **filenames, int count) {
     if (count == 0) return;
+
+    int max_len = 0;
+    for (int i = 0; i < count; i++)
+        if ((int)strlen(filenames[i]) > max_len) max_len = strlen(filenames[i]);
 
     struct winsize w;
     int term_width = 80;
@@ -102,34 +80,15 @@ void column_display(const char *path) {
         }
         printf("\n");
     }
-
-    for (int i = 0; i < count; i++) free(filenames[i]);
-    free(filenames);
 }
 
 // ---------------------- Horizontal Display (-x) ----------------------
-void horizontal_display(const char *path) {
-    struct dirent *entry;
-    DIR *dir = opendir(path);
-    if (!dir) {
-        perror("opendir");
-        return;
-    }
-
-    char **filenames = NULL;
-    int count = 0;
-    int max_len = 0;
-
-    while ((entry = readdir(dir)) != NULL) {
-        filenames = realloc(filenames, sizeof(char*) * (count + 1));
-        filenames[count] = strdup(entry->d_name);
-        int len = strlen(entry->d_name);
-        if (len > max_len) max_len = len;
-        count++;
-    }
-    closedir(dir);
-
+void horizontal_display_from_array(char **filenames, int count) {
     if (count == 0) return;
+
+    int max_len = 0;
+    for (int i = 0; i < count; i++)
+        if ((int)strlen(filenames[i]) > max_len) max_len = strlen(filenames[i]);
 
     struct winsize w;
     int term_width = 80;
@@ -149,9 +108,29 @@ void horizontal_display(const char *path) {
         }
     }
     if (cur_width != 0) printf("\n");
+}
 
-    for (int i = 0; i < count; i++) free(filenames[i]);
-    free(filenames);
+// ---------------------- Read Directory, Skip Hidden, Sort ----------------------
+char **read_and_sort(const char *path, int *count) {
+    struct dirent *entry;
+    DIR *dir = opendir(path);
+    if (!dir) { perror("opendir"); *count = 0; return NULL; }
+
+    char **filenames = NULL;
+    *count = 0;
+
+    while ((entry = readdir(dir)) != NULL) {
+        if (entry->d_name[0] == '.') continue; // skip hidden files
+        filenames = realloc(filenames, sizeof(char*) * (*count + 1));
+        filenames[*count] = strdup(entry->d_name);
+        (*count)++;
+    }
+    closedir(dir);
+
+    if (*count > 0)
+        qsort(filenames, *count, sizeof(char*), cmp_str);
+
+    return filenames;
 }
 
 // ---------------------- Main ----------------------
@@ -170,18 +149,18 @@ int main(int argc, char *argv[]) {
     }
 
     const char *path = (optind < argc) ? argv[optind] : ".";
+    int count;
+    char **filenames = read_and_sort(path, &count);
+    if (!filenames) return 0;
 
     switch(mode) {
-        case LONG:
-            long_listing(path);
-            break;
-        case HORIZONTAL:
-            horizontal_display(path);
-            break;
-        case DEFAULT:
-            column_display(path);
-            break;
+        case LONG:      long_listing_from_array(filenames, count); break;
+        case HORIZONTAL: horizontal_display_from_array(filenames, count); break;
+        case DEFAULT:   column_display_from_array(filenames, count); break;
     }
+
+    for (int i = 0; i < count; i++) free(filenames[i]);
+    free(filenames);
 
     return 0;
 }
